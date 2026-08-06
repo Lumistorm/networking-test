@@ -1,12 +1,11 @@
 import socket
-import time
 import struct
+import os
 
 
 HOST = '192.168.18.44'
 PORT = 8000
-HEADER_SIZE = 5
-HEADER_FORMAT = '!IB'
+HEADER_FORMAT = '!QH'
 ENCODING_FORMAT = 'utf-8'
 
 
@@ -19,18 +18,42 @@ def connect_to_host(host_name: str):
     return client
 
 
-def send_message(client, message: str, message_type: int):
-    message = message.encode(ENCODING_FORMAT)
-    header = struct.pack(HEADER_FORMAT, len(message), message_type)
+def send_message(client_socket, message: bytes, message_type: int):
+    header = struct.pack('!IB', len(message), message_type)
 
-    client.sendall(header + message)
+    client_socket.sendall(header + message)
+
+
+def send_file(client_socket, file_path):
+    file_size = os.path.getsize(file_path)
+    file_name = os.path.basename(file_path)
+    file_name = file_name.encode(ENCODING_FORMAT)
+
+    header = struct.pack(HEADER_FORMAT, file_size, len(file_name))
+    client_socket.sendall(header + file_name)
+
+    with open(file_path, 'rb') as file:
+        while True:
+            chunk = file.read(4096)
+            if not chunk:
+                break
+
+            client_socket.sendall(chunk)
 
 
 def main():
-    client = connect_to_host(HOST)
+    client_socket = connect_to_host(HOST)
     while True:
-        a = input('Input: ')
-        send_message(client=client, message=a, message_type=0)
+        msg = input('Command: ')
+        if msg[0:5] == '/send':
+            path = msg[6:]
+            if not os.path.exists(path):
+                print(f'File "{path}" does not exist')
+
+                continue
+
+            send_file(client_socket=client_socket, file_path=path)
+            print(f'File "{path}" sent')
 
 
 if __name__ == '__main__':
