@@ -7,6 +7,7 @@ HOST = '192.168.18.44'
 PORT = 8000
 HEADER_SIZE = 5
 HEADER_FORMAT = '!IB'
+ENCODING_FORMAT = 'utf-8'
 
 
 def connect_to_host(host_name: str):
@@ -19,7 +20,7 @@ def connect_to_host(host_name: str):
 
 
 def send_message(client, message: str, message_type: int):
-    message = message.encode('utf-8')
+    message = message.encode(ENCODING_FORMAT)
     header = struct.pack(HEADER_FORMAT, len(message), message_type)
 
     client.sendall(header + message)

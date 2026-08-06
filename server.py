@@ -7,6 +7,7 @@ HOST = '192.168.18.44'
 PORT = 8000
 HEADER_SIZE = 5
 HEADER_FORMAT = '!IB'
+ENCODING_FORMAT = 'utf-8'
 
 
 def create_server():
@@ -37,7 +38,7 @@ def handle_client(client_socket: socket.socket, client_address):
         message = receive_message(client_socket)
 
         if message:
-            message = message.decode('utf-8')
+            message = message.decode(ENCODING_FORMAT)
             print(f'{client_address}: {message}')
 
             if message == '/quit':
