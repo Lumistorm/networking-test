@@ -1,9 +1,10 @@
 import socket
 import struct
 import os
+import time
 
 
-HOST = '192.168.18.44'
+HOST = '192.168.18.41'
 PORT = 8000
 HEADER_FORMAT = '!QH'
 ENCODING_FORMAT = 'utf-8'
@@ -11,7 +12,6 @@ ENCODING_FORMAT = 'utf-8'
 
 def connect_to_host(host_name: str):
     address = (host_name, PORT)
-
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.connect(address)
 
@@ -52,8 +52,10 @@ def main():
 
                 continue
 
-            send_file(client_socket=client_socket, file_path=path)
+            send_file(client_socket=client_socket, file_path='client1/' + path)
             print(f'File "{path}" sent')
+        else:
+            send_message(client_socket=client_socket, message=msg.encode(ENCODING_FORMAT), message_type=1)
 
 
 if __name__ == '__main__':

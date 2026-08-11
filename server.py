@@ -41,15 +41,6 @@ def handle_client(client_socket: socket.socket, client_address):
         if file_name:
             print(f'Received file "{file_name}" from {client_address}')
 
-        message = receive_message(client_socket)
-
-        if message:
-            message = message.decode(ENCODING_FORMAT)
-            print(f'{client_address}: {message}')
-
-            if message == '/quit':
-                connected = False
-
     print(f'{client_address} has disconnected')
     client_socket.close()
 
@@ -85,10 +76,9 @@ def receive_file(client_socket):
     with open(f'server/{file_name}', 'wb') as file:
         bytes_received = 0
         while bytes_received < file_size:
-
             chunk_size = min(4096, file_size - bytes_received)
             chunk = client_socket.recv(chunk_size)
-            print(bytes_received)
+
             file.write(chunk)
             bytes_received += len(chunk)
 
