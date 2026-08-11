@@ -30,9 +30,11 @@ class Node:
         self.server_socket = None
         self.running = True
 
-    def start(self, protocol):
-        self.server_socket = socket.socket(socket.AF_INET, protocol)
+    def start(self):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
         self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen()
 
         while self.running:
             connection, address = self.server_socket.accept()
@@ -70,43 +72,61 @@ class Node:
         self.peers[address] = connection
 
     def remove_peer(self, address):
-        self.peers.pop(address)
+        self.peers.pop(address, None)
 
-    def send_packet(self, connection, payload, header_dict=None):
-        header_dict = {
-            **(header_dict or {}),
-            'size': len(payload),
-            'timestamp': time.perf_counter()
-        }
+    def send_packet(self, connection, data, header_dict):
         header_bytes = json.dumps(header_dict).encode('utf-8')
         header_size = struct.pack('!I', len(header_bytes))
 
-        connection.sendall(header_size + header_bytes + payload)
+        connection.sendall(header_size + header_bytes + data)
+
+    def send_stream(self, connection, chunks, header_dict):
+        header_bytes = json.dumps(header_dict).encode('utf-8')
+        header_size = struct.pack('!I', len(header_bytes))
+
+        connection.sendall(header_size + header_bytes)
+
+        for chunk in chunks:
+            connection.sendall(chunk)
 
     def send_message(self, connection, message):
         message_bytes = message.encode('utf-8')
         header_dict = {
             'type': 'message',
+            'size': len(message_bytes),
+            'timestamp': time.perf_counter()
         }
 
-        self.send_packet(connection, payload=message_bytes, header_dict=header_dict)
+        self.send_packet(connection, data=message_bytes, header_dict=header_dict)
 
     def send_file(self, connection, file_path):
         file_size = os.path.getsize(file_path)
         filename = os.path.basename(file_path)
-        filename_bytes = filename.encode('utf-8')
+
+        header_dict = {
+            'type': 'file',
+            'filename': filename,
+            'size': file_size,
+            'timestamp': time.perf_counter()
+        }
 
         with open(file_path, 'rb') as file:
-            while True:
-                chunk = file.read(4096)
-                if not chunk:
-                    break
+            chunks = iter(lambda: file.read(4096), b'')
 
-                header_dict = {
-                    'type': 'message',
-                }
+            self.send_stream(connection, chunks=chunks, header_dict=header_dict)
 
-                self.send_packet(connection, payload=message_bytes, header_dict=header_dict)
+    def receive_packet(self, connection):
+        header_size = struct.unpack('!I', self.receive_exactly(connection, size=4))[0]
+
+        header_json = self.receive_exactly(connection, size=header_size).decode('utf-8')
+        header_dict = json.loads(header_json)
+
+        payload = self.receive_exactly(
+            connection,
+            size=header_dict['size']
+        )
+
+        return header_dict, payload
 
     def receive_exactly(self, connection, size: int):
         data = bytearray()
@@ -120,9 +140,6 @@ class Node:
             data.extend(chunk)
 
         return bytes(data)
-
-
-
 
 
 def create_node():
