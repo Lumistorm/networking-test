@@ -46,9 +46,9 @@ class Node:
 
         self.discovery_socket.bind(('', 5000))
 
-        self.broadcast_presence()
         threading.Thread(target=self.accept_loop, daemon=True).start()
         threading.Thread(target=self.discovery_loop, daemon=True).start()
+        self.broadcast_presence()
 
     def stop(self):
         self.running = False
@@ -57,32 +57,6 @@ class Node:
 
         for connection in self.peers.values():
             connection.close()
-
-    def accept_loop(self):
-        while self.running:
-            connection, address = self.server_socket.accept()
-            threading.Thread(
-                target=self.handle_connection,
-                args=(connection, address),
-                daemon=True
-            ).start()
-
-    def handle_connection(self, connection, address):
-        self.register_peer(connection, address)
-
-        print_info(f'Connected to {':'.join(map(str, address))}')
-        try:
-            while self.running:
-                header_dict, data = self.receive_packet(connection)
-                if not data:
-                    break
-
-                print_info(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
-        except ConnectionError as e:
-            print_info(f'Peer disconnected: {e}')
-        finally:
-            connection.close()
-            self.remove_peer(address)
 
     def connect(self, host: str, port: int):
         address = (host, port)
@@ -110,6 +84,55 @@ class Node:
 
         connection.close()
         self.remove_peer(address)
+
+    def accept_loop(self):
+        while self.running:
+            connection, address = self.server_socket.accept()
+            threading.Thread(
+                target=self.handle_connection,
+                args=(connection, address),
+                daemon=True
+            ).start()
+
+    def discovery_loop(self):
+        try:
+            while self.running:
+                data, _ = self.discovery_socket.recvfrom(4096)
+                data_dict = json.loads(data.decode('utf-8'))
+
+                address = tuple(data_dict['address'])
+
+                if address == self.address:
+                    continue
+                if address in self.discovered_peers:
+                    continue
+
+                self.discovered_peers.add(address)
+                print_info(f'Discovered {':'.join(map(str, address))}')
+        except OSError as e:
+            print_info(f'Socket closed unexpectedly: {e}')
+
+    def broadcast_presence(self):
+        data_dict = {'address': self.address}
+        message = json.dumps(data_dict).encode('utf-8')
+        self.discovery_socket.sendto(message, ('<broadcast>', 5000))
+
+    def handle_connection(self, connection, address):
+        self.register_peer(connection, address)
+
+        print_info(f'Connected to {':'.join(map(str, address))}')
+        try:
+            while self.running:
+                header_dict, data = self.receive_packet(connection)
+                if not data:
+                    break
+
+                print_info(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
+        except ConnectionError as e:
+            print_info(f'Peer disconnected: {e}')
+        finally:
+            connection.close()
+            self.remove_peer(address)
 
     def register_peer(self, connection, address):
         self.peers[address] = connection
@@ -184,29 +207,6 @@ class Node:
             data.extend(chunk)
 
         return bytes(data)
-
-    def broadcast_presence(self):
-        data_dict = {'address': self.address}
-        message = json.dumps(data_dict).encode('utf-8')
-        self.discovery_socket.sendto(message, ('<broadcast>', 5000))
-
-    def discovery_loop(self):
-        try:
-            while self.running:
-                data, _ = self.discovery_socket.recvfrom(4096)
-                data_dict = json.loads(data.decode('utf-8'))
-
-                address = tuple(data_dict['address'])
-
-                if address == self.address:
-                    continue
-                if address in self.discovered_peers:
-                    continue
-
-                self.discovered_peers.add(address)
-                print_info(f'Discovered {':'.join(map(str, address))}')
-        except OSError as e:
-            print_info(f'Socket closed unexpectedly: {e}')
 
 
 def create_node(port):
