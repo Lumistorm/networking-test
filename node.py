@@ -55,8 +55,10 @@ class Node:
         self.server_socket.close()
         self.discovery_socket.close()
 
-        for connection in self.peers.values():
+        for connection in list(self.peers.values()):
             connection.close()
+
+        self.peers.clear()
 
     def connect(self, host: str, port: int):
         address = (host, port)
@@ -80,19 +82,27 @@ class Node:
         connection = self.peers.get(address)
 
         if connection is None:
-            return
+            return False
 
+        connection.shutdown(socket.SHUT_RDWR)
         connection.close()
         self.remove_peer(address)
 
+        return True
+
     def accept_loop(self):
-        while self.running:
-            connection, address = self.server_socket.accept()
-            threading.Thread(
-                target=self.handle_connection,
-                args=(connection, address),
-                daemon=True
-            ).start()
+        try:
+            while self.running:
+                connection, address = self.server_socket.accept()
+                threading.Thread(
+                    target=self.handle_connection,
+                    args=(connection, address),
+                    daemon=True
+                ).start()
+
+        except OSError as e:
+            if self.running:
+                print_info(f'Socket closed unexpectedly: {e}')
 
     def discovery_loop(self):
         try:
@@ -110,7 +120,8 @@ class Node:
                 self.discovered_peers.add(address)
                 print_info(f'Discovered {':'.join(map(str, address))}')
         except OSError as e:
-            print_info(f'Socket closed unexpectedly: {e}')
+            if self.running:
+                print_info(f'Socket closed unexpectedly: {e}')
 
     def broadcast_presence(self):
         data_dict = {'address': self.address}
@@ -120,17 +131,19 @@ class Node:
     def handle_connection(self, connection, address):
         self.register_peer(connection, address)
 
-        print_info(f'Connected to {':'.join(map(str, address))}')
+        address_string = ':'.join(map(str, address))
+        print_info(f'Connected to {address_string}')
         try:
             while self.running:
                 header_dict, data = self.receive_packet(connection)
                 if not data:
                     break
 
-                print_info(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
-        except ConnectionError as e:
-            print_info(f'Peer disconnected: {e}')
+                print_info(f'[{address_string}] {data.decode('utf-8')}')
+        except (ConnectionError, OSError):
+            print_info(f'{address_string} disconnected')
         finally:
+
             connection.close()
             self.remove_peer(address)
 
@@ -160,7 +173,7 @@ class Node:
         header_dict = {
             'type': 'message',
             'size': len(message_bytes),
-            'timestamp': time.perf_counter()
+            'timestamp': time.time()
         }
 
         self.send_packet(connection, data=message_bytes, header_dict=header_dict)
@@ -173,12 +186,11 @@ class Node:
             'type': 'file',
             'filename': filename,
             'size': file_size,
-            'timestamp': time.perf_counter()
+            'timestamp': time.time()
         }
 
         with open(file_path, 'rb') as file:
             chunks = iter(lambda: file.read(4096), b'')
-
             self.send_stream(connection, chunks=chunks, header_dict=header_dict)
 
     def receive_packet(self, connection):
@@ -211,7 +223,6 @@ class Node:
 
 def create_node(port):
     host = get_local_ip()
-
     node = Node(host=host, port=port)
 
     return node
@@ -273,7 +284,19 @@ def handle_commands(node):
             print_error('Invalid arguments. Expected \'disconnect <host>:<port>\'')
             return
 
-        node.disconnect((host, port))
+        try:
+            port = int(port)
+        except ValueError:
+            print_error('Port must be an integer')
+            return
+
+        print_info((host, port))
+        disconnected = node.disconnect((host, port))
+
+        if disconnected:
+            print_info(f'Disconnected from {address}')
+        else:
+            print_error(f'Disconnect failed: not connected to {address}')
 
     elif command.startswith('stop'):
         node.stop()
