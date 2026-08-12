@@ -50,6 +50,14 @@ class Node:
         threading.Thread(target=self.accept_loop, daemon=True).start()
         threading.Thread(target=self.discovery_loop, daemon=True).start()
 
+    def stop(self):
+        self.running = False
+        self.server_socket.close()
+        self.discovery_socket.close()
+
+        for connection in self.peers.values():
+            connection.close()
+
     def accept_loop(self):
         while self.running:
             connection, address = self.server_socket.accept()
@@ -93,6 +101,15 @@ class Node:
             ).start()
         except OSError as e:
             print(f'Connection to {':'.join(map(str, address))} failed: {e}')
+
+    def disconnect(self, address):
+        connection = self.peers.get(address)
+
+        if connection is None:
+            return
+
+        connection.close()
+        self.remove_peer(address)
 
     def register_peer(self, connection, address):
         self.peers[address] = connection
