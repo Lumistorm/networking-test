@@ -70,16 +70,16 @@ class Node:
     def handle_connection(self, connection, address):
         self.register_peer(connection, address)
 
-        print(f'Connected to {':'.join(map(str, address))}')
+        print_info(f'Connected to {':'.join(map(str, address))}')
         try:
             while self.running:
                 header_dict, data = self.receive_packet(connection)
                 if not data:
                     break
 
-                print(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
+                print_info(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
         except ConnectionError as e:
-            print(f'Peer disconnected: {e}')
+            print_info(f'Peer disconnected: {e}')
         finally:
             connection.close()
             self.remove_peer(address)
@@ -100,7 +100,7 @@ class Node:
                 daemon=True
             ).start()
         except OSError as e:
-            print(f'Connection to {':'.join(map(str, address))} failed: {e}')
+            print_info(f'Connection to {':'.join(map(str, address))} failed: {e}')
 
     def disconnect(self, address):
         connection = self.peers.get(address)
@@ -204,9 +204,9 @@ class Node:
                     continue
 
                 self.discovered_peers.add(address)
-                print(f'Discovered {':'.join(map(str, address))}')
+                print_info(f'Discovered {':'.join(map(str, address))}')
         except OSError as e:
-            print(f'Socket closed unexpectedly: {e}')
+            print_info(f'Socket closed unexpectedly: {e}')
 
 
 def create_node(port):
@@ -217,10 +217,77 @@ def create_node(port):
     return node
 
 
+def print_error(error):
+    print(f'\033[31m{error}\033[0m', flush=True)
+    print('> ', end='', flush=True)
+
+
+def print_info(message):
+    print(f'\r{message}', flush=True)
+    print('\r> ', end='', flush=True)
+
+
+def handle_commands(node):
+    print('\r> ', end='', flush=True)
+    command = input('').strip()
+    if command.startswith('connect '):
+        try:
+            host, port = command[8:].split(':')
+        except ValueError:
+            print_error('Invalid arguments. Expected \'connect <host>:<port>\'')
+            return
+
+        try:
+            port = int(port)
+        except ValueError:
+            print_error('Port must be an integer')
+            return
+
+        node.connect(host, port)
+    elif command.startswith('send '):
+        try:
+            args = command[5:].split(maxsplit=1)
+            address, message = args
+            host, port = address.split(':')
+        except ValueError:
+            print_error('Invalid arguments. Expected \'send <host>:<port> <message>\'')
+            return
+
+        try:
+            port = int(port)
+        except ValueError:
+            print_error('Port must be an integer')
+            return
+
+        connection = node.peers.get((host, port))
+        if connection is None:
+            print_error(f'Message failed: not connected to {host}:{port}')
+            return
+
+        node.send_message(connection, message)
+    elif command.startswith('disconnect '):
+        try:
+            address = command[11:]
+            host, port = address.split(':')
+        except ValueError:
+            print_error('Invalid arguments. Expected \'disconnect <host>:<port>\'')
+            return
+
+        node.disconnect((host, port))
+
+    elif command.startswith('stop'):
+        node.stop()
+    else:
+        print_error(f'Unknown command: {command}')
+        return
+
+
 def main():
     port = random.randint(2000, 8000)
     my_node = create_node(port)
     my_node.start()
+    while my_node.running:
+        handle_commands(my_node)
 
 
 if __name__ == '__main__':
