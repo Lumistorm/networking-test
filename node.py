@@ -25,31 +25,51 @@ class Node:
     def __init__(self, host, port):
         self.host = host
         self.port = port
+        self.address = (host, port)
 
         self.peers = {}
+        self.discovered_peers = set()
 
-        self.server_socket = None
-        self.running = True
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.discovery_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+        self.running = False
 
     def start(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind((self.host, self.port))
+        self.running = True
 
+        self.server_socket.bind((self.host, self.port))
         self.server_socket.listen()
 
+        self.discovery_socket.bind(('', 5000))
+
+        self.broadcast_presence()
         threading.Thread(target=self.accept_loop, daemon=True).start()
+        threading.Thread(target=self.discovery_loop, daemon=True).start()
 
     def accept_loop(self):
         while self.running:
             connection, address = self.server_socket.accept()
-            threading.Thread(target=self.handle_connection, args=(connection, address), daemon=True).start()
+            threading.Thread(
+                target=self.handle_connection,
+                args=(connection, address),
+                daemon=True
+            ).start()
 
     def handle_connection(self, connection, address):
+        self.register_peer(connection, address)
+
+        print(f'Connected to {':'.join(map(str, address))}')
         try:
             while self.running:
-                data = self.receive_packet(connection)
+                header_dict, data = self.receive_packet(connection)
                 if not data:
                     break
+
+                print(f'[{':'.join(map(str, address))}] {data.decode('utf-8')}')
         except ConnectionError as e:
             print(f'Peer disconnected: {e}')
         finally:
@@ -66,12 +86,13 @@ class Node:
             sock.connect(address)
             sock.settimeout(None)
 
-            self.register_peer(sock, address)
-
-            peer_thread = threading.Thread(target=self.handle_connection, args=(sock, address), daemon=True)
-            peer_thread.start()
+            threading.Thread(
+                target=self.handle_connection,
+                args=(sock, address),
+                daemon=True
+            ).start()
         except OSError as e:
-            print(f'Connection to {address} failed: {e}')
+            print(f'Connection to {':'.join(map(str, address))} failed: {e}')
 
     def register_peer(self, connection, address):
         self.peers[address] = connection
@@ -147,6 +168,30 @@ class Node:
 
         return bytes(data)
 
+    def broadcast_presence(self):
+        data_dict = {'address': self.address}
+        message = json.dumps(data_dict).encode('utf-8')
+        self.discovery_socket.sendto(message, ('<broadcast>', 5000))
+
+    def discovery_loop(self):
+        try:
+            while self.running:
+                data, _ = self.discovery_socket.recvfrom(4096)
+                data_dict = json.loads(data.decode('utf-8'))
+
+                address = tuple(data_dict['address'])
+
+                if address == self.address:
+                    continue
+                if address in self.discovered_peers:
+                    continue
+
+                self.discovered_peers.add(address)
+                print(f'Discovered {':'.join(map(str, address))}')
+        except OSError as e:
+            print(f'Socket closed unexpectedly: {e}')
+
+
 def create_node(port):
     host = get_local_ip()
 
@@ -159,8 +204,6 @@ def main():
     port = random.randint(2000, 8000)
     my_node = create_node(port)
     my_node.start()
-    host = input('Connect to: ')
-    # my_node.connect(host, 8000)
 
 
 if __name__ == '__main__':
