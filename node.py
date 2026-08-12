@@ -4,6 +4,7 @@ import time
 import json
 import struct
 import os
+import random
 
 
 def get_local_ip():
@@ -32,24 +33,28 @@ class Node:
 
     def start(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
         self.server_socket.bind((self.host, self.port))
+
         self.server_socket.listen()
 
+        threading.Thread(target=self.accept_loop, daemon=True).start()
+
+    def accept_loop(self):
         while self.running:
             connection, address = self.server_socket.accept()
+            threading.Thread(target=self.handle_connection, args=(connection, address), daemon=True).start()
 
-            peer_thread = threading.Thread(target=self.handle_peer, args=(connection, address), daemon=True)
-            peer_thread.start()
-
-    def handle_peer(self, connection, address):
-        while self.running:
-            data = connection.recv(4096)
-            if not data:
-                break
-
-        connection.close()
-        self.remove_peer(address)
+    def handle_connection(self, connection, address):
+        try:
+            while self.running:
+                data = self.receive_packet(connection)
+                if not data:
+                    break
+        except ConnectionError as e:
+            print(f'Peer disconnected: {e}')
+        finally:
+            connection.close()
+            self.remove_peer(address)
 
     def connect(self, host: str, port: int):
         address = (host, port)
@@ -63,7 +68,7 @@ class Node:
 
             self.register_peer(sock, address)
 
-            peer_thread = threading.Thread(target=self.handle_peer, args=(sock, address), daemon=True)
+            peer_thread = threading.Thread(target=self.handle_connection, args=(sock, address), daemon=True)
             peer_thread.start()
         except OSError as e:
             print(f'Connection to {address} failed: {e}')
@@ -116,7 +121,8 @@ class Node:
             self.send_stream(connection, chunks=chunks, header_dict=header_dict)
 
     def receive_packet(self, connection):
-        header_size = struct.unpack('!I', self.receive_exactly(connection, size=4))[0]
+        header_size_bytes = self.receive_exactly(connection, size=4)
+        header_size = struct.unpack('!I', header_size_bytes)[0]
 
         header_json = self.receive_exactly(connection, size=header_size).decode('utf-8')
         header_dict = json.loads(header_json)
@@ -135,16 +141,14 @@ class Node:
             remaining = size - len(data)
             chunk = connection.recv(remaining)
             if not chunk:
-                return None
+                raise ConnectionError
 
             data.extend(chunk)
 
         return bytes(data)
 
-
-def create_node():
+def create_node(port):
     host = get_local_ip()
-    port = 8000
 
     node = Node(host=host, port=port)
 
@@ -152,7 +156,11 @@ def create_node():
 
 
 def main():
-    my_node = create_node()
+    port = random.randint(2000, 8000)
+    my_node = create_node(port)
+    my_node.start()
+    host = input('Connect to: ')
+    # my_node.connect(host, 8000)
 
 
 if __name__ == '__main__':
