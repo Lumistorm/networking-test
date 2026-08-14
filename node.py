@@ -307,6 +307,7 @@ def handle_commands(node):
 
 def main():
     port = random.randint(2000, 8000)
+    print_info(port)
     my_node = create_node(port)
     my_node.start()
     while my_node.running:
