@@ -2,7 +2,7 @@ import threading
 import time
 import os
 import random
-from connections import *
+from connection import *
 from protocol import *
 
 
