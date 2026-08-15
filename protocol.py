@@ -14,7 +14,7 @@ class MessageType(StrEnum):
     ERROR = 'error'
 
 
-def _handle_packet():
+def handle_packet():
     pass
 
 
@@ -26,7 +26,7 @@ def _frame_header(header):
     return header_size_bytes + header_bytes
 
 
-def _send_packet(connection, header, payload=None):
+def send_packet(connection, header, payload=None):
     payload = payload if payload is not None else b''
 
     header['size'] = len(payload)
@@ -35,7 +35,7 @@ def _send_packet(connection, header, payload=None):
     connection.sendall(framed_header + payload)
 
 
-def _send_stream(connection, header, chunks, size):
+def send_stream(connection, header, chunks, size):
     header['size'] = size
     framed_header = _frame_header(header)
 
@@ -78,6 +78,6 @@ def ping(connection):
     _send_packet(connection, header, None)
 
 
-def _pong(connection):
+def pong(connection):
     header = {'type': MessageType.PONG}
     _send_packet(connection, header, None)
