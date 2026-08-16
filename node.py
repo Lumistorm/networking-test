@@ -1,6 +1,5 @@
 import threading
-import time
-import os
+import secrets
 import random
 from connection import *
 from protocol import *
@@ -26,131 +25,220 @@ class Node:
         self.port = port
         self.address = (host, port)
 
-        self.peers = {}
-        self.discovered_peers = set()
+        self.node_id = secrets.token_hex(8)
+        print(self.node_id)
 
-        self.server_socket = create_tcp_socket(host, port)
-        self.discovery_socket = create_udp_socket('', 5000)
+        self.connected_peers = {}
+        self.known_peers = {}
 
         self.running = False
 
+        self.tcp_socket = create_listening_socket(host, port)
+        self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self.udp_socket.bind(('', 5000))
+
+        self._accept_thread = None
+        self._discovery_thread = None
+
     def start(self):
+        if self.running:
+            return
+
         self.running = True
 
-        threading.Thread(target=self.accept_loop, daemon=True).start()
-        threading.Thread(target=self.discovery_loop, daemon=True).start()
+        self._accept_thread = threading.Thread(
+            target=self._accept_loop,
+            daemon=True
+        )
+        self._discovery_thread = threading.Thread(
+            target=self._discovery_loop,
+            daemon=True
+        )
+
+        self._accept_thread.start()
+        self._discovery_thread.start()
 
         self.broadcast_presence()
 
     def stop(self):
+        if not self.running:
+            return
+
         self.running = False
-        self.server_socket.close()
-        self.discovery_socket.close()
 
-        for connection in list(self.peers.values()):
-            connection.close()
+        self.tcp_socket.close()
+        self.udp_socket.close()
 
-        self.peers.clear()
+        self._accept_thread.join()
+        self._discovery_thread.join()
 
-    def connect(self, host: str, port: int):
-        connect(host, port, 10)
+        self._accept_thread = None
+        self._discovery_thread = None
 
-    def disconnect(self, address):
-        connection = self.peers.get(address)
+    def connect(self, node_id):
+        peer = self.known_peers[node_id]
+        host = peer['host']
+        port = peer['port']
+        connection = connect(host, port, timeout=10)
 
-        if connection is None:
-            return False
+        send(connection, MessageType.HELLO, 0, self.node_id.encode('utf-8'))
+        print('send hello')
 
-        close_connection(connection)
-        self.remove_peer(address)
+        thread = threading.Thread(
+            target=self._handle_connection,
+            args=(connection,),
+            daemon=True
+        )
+        thread.start()
 
-        return True
+    def disconnect(self, node_id):
+        connection = self.connected_peers[node_id]
+        self._close_connection(connection)
 
-    def accept_loop(self):
+    def _close_connection(self, connection):
         try:
-            while self.running:
-                connection, address = self.server_socket.accept()
-                threading.Thread(
-                    target=self.handle_connection,
-                    args=(connection, address),
-                    daemon=True
-                ).start()
+            connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
-        except OSError as e:
+        connection.close()
+
+    def _handle_connection(self, connection):
+        try:
+            print('waiting')
+            header, payload = receive(connection)
+            print(header['message_type'])
+
+            if header['message_type'] == MessageType.HELLO:
+                print('send hello ack')
+                send(connection, MessageType.HELLO_ACK, 0, self.node_id.encode('utf-8'))
+
+            elif header['message_type'] != MessageType.HELLO_ACK:
+                connection.close()
+                return
+
+            node_id = payload.decode('utf-8')
+
+            print(f'Connected to {node_id}')
+            self.connected_peers[node_id] = connection
+
+            while self.running:
+                header, data = self.receive(connection)
+                if data is None:
+                    break
+
+                print_info(f'[{node_id}] {data}')
+
+                self._handle_packet()
+        except OSError:
             if self.running:
-                print_info(f'Socket closed unexpectedly: {e}')
+                raise
+        finally:
+            self._close_connection(connection)
 
-    def discovery_loop(self):
-        try:
-            while self.running:
-                data, _ = self.discovery_socket.recvfrom(4096)
+    def _accept_loop(self):
+        while self.running:
+            try:
+                connection, address = self.tcp_socket.accept()
+            except OSError:
+                if self.running:
+                    raise
+                break
+
+            thread = threading.Thread(
+                target=self._handle_connection,
+                args=(connection,),
+                daemon=True
+            )
+            thread.start()
+
+    def _discovery_loop(self):
+        while self.running:
+            try:
+                data, _ = self.udp_socket.recvfrom(4096)
                 data_dict = json.loads(data.decode('utf-8'))
 
-                address = tuple(data_dict['address'])
+                node_id = data_dict['node_id']
+                host = data_dict['host']
+                port = data_dict['port']
+                address = (host, port)
 
                 if address == self.address:
                     continue
-                if address in self.discovered_peers:
+                if node_id in self.known_peers:
                     continue
 
-                self.discovered_peers.add(address)
-                print_info(f'Discovered {':'.join(map(str, address))}')
-        except OSError as e:
-            if self.running:
-                print_info(f'Socket closed unexpectedly: {e}')
+                self.known_peers[node_id] = {
+                    'host': host,
+                    'port': port,
+                }
+                print_info(f'Discovered {node_id}')
+                self.broadcast_presence()
+            except OSError:
+                if self.running:
+                    raise
+                break
+
+    def broadcast(self, message):
+        message = message.encode('utf-8')
+
+        self.udp_socket.sendto(
+            message,
+            ('<broadcast>', 5000)
+        )
 
     def broadcast_presence(self):
-        data_dict = {'address': self.address}
-        message = json.dumps(data_dict).encode('utf-8')
-        self.discovery_socket.sendto(message, ('<broadcast>', 5000))
+        data_dict = {
+            'node_id': self.node_id,
+            'host': self.host,
+            'port': self.port,
+        }
+        message = json.dumps(data_dict)
+        self.broadcast(message)
 
-    def handle_connection(self, connection, address):
-        self.register_peer(connection, address)
+    def _add_peer(self, node_id):
+        self.known_peers.setdefault(node_id)
 
-        address_string = ':'.join(map(str, address))
-        print_info(f'Connected to {address_string}')
-        try:
-            while self.running:
-                header_dict, data = receive_packet(connection)
-                if not data:
-                    break
+    def _remove_peer(self, node_id):
+        self.known_peers.pop(node_id, None)
 
-                print_info(f'[{address_string}] {data.decode('utf-8')}')
-        except (ConnectionError, OSError):
-            print_info(f'{address_string} disconnected')
-        finally:
+    def _handle_packet(self):
+        pass
 
-            connection.close()
-            self.remove_peer(address)
-
-    def register_peer(self, connection, address):
-        self.peers[address] = connection
-
-    def remove_peer(self, address):
-        self.peers.pop(address, None)
-
-    def send_message(self, connection, message):
+    def send_message(self, node_id, message):
         message_bytes = message.encode('utf-8')
-        header = {
-            'type': 'message',
-            'timestamp': time.time()
-        }
+        connection = self.connected_peers[node_id]
 
-        send_packet(connection, header=header, payload=message_bytes)
+        send(
+            connection=connection,
+            message_type=MessageType.TEXT,
+            session_id=0,
+            payload=message_bytes
+        )
 
-    def send_file(self, connection, file_path):
-        file_size = os.path.getsize(file_path)
-        filename = os.path.basename(file_path)
+    # def send_file(self, node_id, file_path):
+    #     file_size = os.path.getsize(file_path)
+    #     filename = os.path.basename(file_path)
+    #
+    #     header = {
+    #         'type': 'file',
+    #         'filename': filename,
+    #         'size': file_size,
+    #         'timestamp': time.time()
+    #     }
+    #
+    #     connection = self.connected_peers[node_id]
+    #
+    #     with open(file_path, 'rb') as file:
+    #         chunks = iter(lambda: file.read(4096), b'')
+    #         send_stream(connection, chunks=chunks, header=header)
 
-        header = {
-            'type': 'file',
-            'filename': filename,
-            'timestamp': time.time()
-        }
-
-        with open(file_path, 'rb') as file:
-            chunks = iter(lambda: file.read(4096), b'')
-            send_stream(connection, header=header, chunks=chunks, size=file_size)
+    def receive(self, connection):
+        header, payload = receive(connection)
+        return header, payload.decode('utf-8')
 
 
 def create_node(port):
@@ -174,40 +262,18 @@ def handle_commands(node):
     print('\r> ', end='', flush=True)
     command = input('').strip()
     if command.startswith('connect '):
-        try:
-            host, port = command[8:].split(':')
-        except ValueError:
-            print_error('Invalid arguments. Expected \'connect <host>:<port>\'')
-            return
+        node_id = command[8:]
 
-        try:
-            port = int(port)
-        except ValueError:
-            print_error('Port must be an integer')
-            return
-
-        node.connect(host, port)
+        node.connect(node_id)
     elif command.startswith('send '):
+        args = command[5:].split(maxsplit=1)
         try:
-            args = command[5:].split(maxsplit=1)
-            address, message = args
-            host, port = address.split(':')
+            node_id, message = args
         except ValueError:
-            print_error('Invalid arguments. Expected \'send <host>:<port> <message>\'')
+            print_error('Invalid arguments. Expected \'connect <node_id>\'')
             return
 
-        try:
-            port = int(port)
-        except ValueError:
-            print_error('Port must be an integer')
-            return
-
-        connection = node.peers.get((host, port))
-        if connection is None:
-            print_error(f'Message failed: not connected to {host}:{port}')
-            return
-
-        node.send_message(connection, message)
+        node.send_message(node_id, message)
     elif command.startswith('disconnect '):
         try:
             address = command[11:]
