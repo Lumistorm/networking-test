@@ -23,7 +23,7 @@ def handle_packet():
     pass
 
 
-def _build_header(header):
+def build_header(header):
     header_json = json.dumps(header)
     header_bytes = header_json.encode('utf-8')
     header_size_bytes = struct.pack('!I', len(header_bytes))
