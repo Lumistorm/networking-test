@@ -1,8 +1,8 @@
 import threading
 import secrets
 import random
+import json
 from connection import *
-from protocol import *
 
 
 def get_local_ip():
@@ -84,9 +84,6 @@ class Node:
         port = peer['port']
         connection = connect(host, port, timeout=10)
 
-        send(connection, MessageType.HELLO, 0, self.node_id.encode('utf-8'))
-        print('send hello')
-
         thread = threading.Thread(
             target=self._handle_connection,
             args=(connection,),
@@ -95,58 +92,46 @@ class Node:
         thread.start()
 
     def disconnect(self, node_id):
-        connection = self.connected_peers[node_id]
-        self._close_connection(connection)
+        connection = self.connected_peers.pop(node_id, None)
 
-    def _close_connection(self, connection):
-        try:
-            connection.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+        if connection is None:
+            return False
 
-        connection.close()
+        connection.disconnect()
+
+        return True
 
     def _handle_connection(self, connection):
         try:
-            print('waiting')
-            header, payload = receive(connection)
-            print(header['message_type'])
+            peer_node_id = connection.handshake(self.node_id)
+            self.connected_peers[peer_node_id] = connection
 
-            if header['message_type'] == MessageType.HELLO:
-                print('send hello ack')
-                send(connection, MessageType.HELLO_ACK, 0, self.node_id.encode('utf-8'))
-
-            elif header['message_type'] != MessageType.HELLO_ACK:
-                connection.close()
-                return
-
-            node_id = payload.decode('utf-8')
-
-            print(f'Connected to {node_id}')
-            self.connected_peers[node_id] = connection
+            print(f'Connected to {peer_node_id}')
 
             while self.running:
-                header, data = self.receive(connection)
+                message_type, data = self.receive(connection)
                 if data is None:
                     break
 
-                print_info(f'[{node_id}] {data}')
+                print_info(f'[{peer_node_id}] {data}')
 
                 self._handle_packet()
         except OSError:
             if self.running:
                 raise
         finally:
-            self._close_connection(connection)
+            connection.close()
 
     def _accept_loop(self):
         while self.running:
             try:
-                connection, address = self.tcp_socket.accept()
+                sock, address = self.tcp_socket.accept()
             except OSError:
                 if self.running:
                     raise
                 break
+
+            connection = Connection(sock, is_inbound=True)
 
             thread = threading.Thread(
                 target=self._handle_connection,
@@ -210,12 +195,15 @@ class Node:
 
     def send_message(self, node_id, message):
         message_bytes = message.encode('utf-8')
-        connection = self.connected_peers[node_id]
+        connection = self.connected_peers.get(node_id)
 
-        send(
-            connection=connection,
+        if connection is None:
+            print_error(f'Message error: Not connected to {node_id}')
+
+            return
+
+        connection.send(
             message_type=MessageType.TEXT,
-            session_id=0,
             payload=message_bytes
         )
 
@@ -237,8 +225,8 @@ class Node:
     #         send_stream(connection, chunks=chunks, header=header)
 
     def receive(self, connection):
-        header, payload = receive(connection)
-        return header, payload.decode('utf-8')
+        message_type, payload = connection.receive()
+        return message_type, payload.decode('utf-8')
 
 
 def create_node(port):
@@ -270,31 +258,19 @@ def handle_commands(node):
         try:
             node_id, message = args
         except ValueError:
-            print_error('Invalid arguments. Expected \'connect <node_id>\'')
+            print_error('Invalid arguments. Expected \'send <node_id> <message>\'')
             return
 
         node.send_message(node_id, message)
     elif command.startswith('disconnect '):
-        try:
-            address = command[11:]
-            host, port = address.split(':')
-        except ValueError:
-            print_error('Invalid arguments. Expected \'disconnect <host>:<port>\'')
-            return
+        node_id = command[11:]
 
-        try:
-            port = int(port)
-        except ValueError:
-            print_error('Port must be an integer')
-            return
-
-        print_info((host, port))
-        disconnected = node.disconnect((host, port))
+        disconnected = node.disconnect(node_id)
 
         if disconnected:
-            print_info(f'Disconnected from {address}')
+            print_info(f'Disconnected from {node_id}')
         else:
-            print_error(f'Disconnect failed: not connected to {address}')
+            print_error(f'Disconnect failed: not connected to {node_id}')
 
     elif command.startswith('stop'):
         node.stop()
