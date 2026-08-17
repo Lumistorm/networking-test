@@ -1,7 +1,7 @@
 import threading
 import secrets
 import random
-import json
+import os
 from connection import *
 
 
@@ -109,7 +109,7 @@ class Node:
             print(f'Connected to {peer_node_id}')
 
             while self.running:
-                message_type, data = self.receive(connection)
+                header, data = self.receive(connection)
                 if data is None:
                     break
 
@@ -207,26 +207,25 @@ class Node:
             payload=message_bytes
         )
 
-    # def send_file(self, node_id, file_path):
-    #     file_size = os.path.getsize(file_path)
-    #     filename = os.path.basename(file_path)
-    #
-    #     header = {
-    #         'type': 'file',
-    #         'filename': filename,
-    #         'size': file_size,
-    #         'timestamp': time.time()
-    #     }
-    #
-    #     connection = self.connected_peers[node_id]
-    #
-    #     with open(file_path, 'rb') as file:
-    #         chunks = iter(lambda: file.read(4096), b'')
-    #         send_stream(connection, chunks=chunks, header=header)
+    def send_file(self, node_id, file_path):
+        file_size = os.path.getsize(file_path)
+        filename = os.path.basename(file_path)
+
+        metadata = {
+            'kind': 'file',
+            'filename': filename,
+            'size': file_size,
+        }
+
+        connection = self.connected_peers[node_id]
+
+        with open(file_path, 'rb') as file:
+            chunks = iter(lambda: file.read(4096), b'')
+            connection.send_stream(chunks=chunks, metadata=metadata)
 
     def receive(self, connection):
-        message_type, payload = connection.receive()
-        return message_type, payload.decode('utf-8')
+        header, payload = connection.receive()
+        return header, payload.decode('utf-8')
 
 
 def create_node(port):

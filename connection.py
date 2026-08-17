@@ -27,8 +27,8 @@ class Connection:
         if not self.is_inbound:
             self.send_hello(node_id)
 
-            message_type, payload = self.receive()
-            if message_type != MessageType.HELLO_ACK:
+            header, payload = self.receive()
+            if header['type'] != MessageType.HELLO_ACK:
                 raise ConnectionError
 
             metadata = json.loads(payload.decode('utf-8'))
@@ -36,8 +36,8 @@ class Connection:
 
             self.send_hello_done()
         else:
-            message_type, payload = self.receive()
-            if message_type != MessageType.HELLO:
+            header, payload = self.receive()
+            if header['type'] != MessageType.HELLO:
                 raise ConnectionError
 
             metadata = json.loads(payload.decode('utf-8'))
@@ -45,8 +45,8 @@ class Connection:
 
             self.send_hello_ack(node_id)
 
-            message_type, payload = self.receive()
-            if message_type != MessageType.HELLO_DONE:
+            header, payload = self.receive()
+            if header['type'] != MessageType.HELLO_DONE:
                 raise ConnectionError
 
         return peer_node_id
@@ -104,7 +104,7 @@ class Connection:
 
         payload = self._receive_exactly(header['length'])
 
-        return header['type'], payload
+        return header, payload
 
     def _receive_exactly(self, size):
         data = bytearray()
