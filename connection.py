@@ -23,6 +23,34 @@ class Connection:
 
         self.sock.close()
 
+    def handshake(self, node_id):
+        if not self.is_inbound:
+            self.send_hello(node_id)
+
+            message_type, payload = self.receive()
+            if message_type != MessageType.HELLO_ACK:
+                raise ConnectionError
+
+            metadata = json.loads(payload.decode('utf-8'))
+            peer_node_id = metadata['node_id']
+
+            self.send_hello_done()
+        else:
+            message_type, payload = self.receive()
+            if message_type != MessageType.HELLO:
+                raise ConnectionError
+
+            metadata = json.loads(payload.decode('utf-8'))
+            peer_node_id = metadata['node_id']
+
+            self.send_hello_ack(node_id)
+
+            message_type, payload = self.receive()
+            if message_type != MessageType.HELLO_DONE:
+                raise ConnectionError
+
+        return peer_node_id
+
     def send_hello(self, node_id):
         payload = json.dumps({'node_id': node_id}).encode('utf-8')
         self.send(MessageType.HELLO, payload)
@@ -105,7 +133,7 @@ def connect(host, port, timeout):
 
     sock.settimeout(None)
 
-    return Connection(sock)
+    return Connection(sock, is_inbound=False)
 
 
 def create_listening_socket(host, port):
