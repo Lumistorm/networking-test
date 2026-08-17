@@ -1,7 +1,111 @@
+import json
 import socket
 import struct
-import json
-from protocol import build_header, MessageType
+from protocol import MessageType, build_header, parse_header
+
+
+class Connection:
+    def __init__(self, sock, *, is_inbound):
+        self.sock = sock
+        self.connection_id = ''
+
+        self.is_inbound = is_inbound
+        self._next_stream_id = 2 if is_inbound else 1
+
+    def close(self):
+        self.sock.close()
+
+    def disconnect(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+        self.sock.close()
+
+    def send_hello(self, node_id):
+        payload = json.dumps({'node_id': node_id}).encode('utf-8')
+        self.send(MessageType.HELLO, payload)
+
+    def send_hello_ack(self, node_id):
+        payload = json.dumps({'node_id': node_id}).encode('utf-8')
+        self.send(MessageType.HELLO_ACK, payload)
+
+    def send_hello_done(self):
+        self.send(MessageType.HELLO_DONE)
+
+    def ping(self):
+        self.send(MessageType.PING)
+
+    def pong(self):
+        self.send(MessageType.PONG)
+
+    def send(self, message_type, payload=b'', *, stream_id=None):
+        header = build_header(
+            message_type=message_type,
+            payload_length=len(payload),
+            connection_id=self.connection_id,
+            stream_id=stream_id
+        )
+
+        self.sock.sendall(header + payload)
+
+    def send_stream(self, chunks, metadata):
+        stream_id = self.new_stream_id()
+
+        metadata_bytes = json.dumps(metadata).encode()
+        self.send(MessageType.STREAM_START, metadata_bytes, stream_id=stream_id)
+
+        for chunk in chunks:
+            self.send(MessageType.DATA, chunk, stream_id=stream_id)
+
+        self.send(MessageType.STREAM_END, stream_id=stream_id)
+
+    def new_stream_id(self):
+        stream_id = self._next_stream_id
+        self._next_stream_id += 2
+
+        return stream_id
+
+    def receive(self):
+        header_length_bytes = self._receive_exactly(4)
+        header_length = struct.unpack('!I', header_length_bytes)[0]
+
+        header_bytes = self._receive_exactly(header_length)
+        header = parse_header(header_bytes)
+
+        payload = self._receive_exactly(header['length'])
+
+        return header['type'], payload
+
+    def _receive_exactly(self, size):
+        data = bytearray()
+
+        while len(data) < size:
+            remaining = size - len(data)
+            chunk = self.sock.recv(remaining)
+
+            if not chunk:
+                raise ConnectionError('Peer disconnected')
+
+            data.extend(chunk)
+
+        return bytes(data)
+
+
+def connect(host, port, timeout):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    try:
+        sock.connect((host, port))
+    except OSError:
+        sock.close()
+        raise
+
+    sock.settimeout(None)
+
+    return Connection(sock)
 
 
 def create_listening_socket(host, port):
@@ -11,81 +115,3 @@ def create_listening_socket(host, port):
     sock.listen()
 
     return sock
-
-
-def connect(host, port, timeout):
-    connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    connection.settimeout(timeout)
-
-    try:
-        connection.connect((host, port))
-    except OSError:
-        connection.close()
-        raise
-
-    connection.settimeout(None)
-
-    return connection
-
-
-def close_connection(connection):
-    try:
-        connection.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
-
-    connection.close()
-    
-
-def ping(connection):
-    send(connection, MessageType.PING, None)
-
-
-def pong(connection):
-    send(connection, MessageType.PONG, None)
-    
-    
-def send(connection, message_type, session_id, payload=None):
-    payload = payload if payload is not None else b''
-    header = build_header(message_type, session_id, len(payload))
-
-    connection.sendall(header + payload)
-
-
-# def send_stream(connection, header, chunks, size):
-#     header['size'] = size
-#     framed_header = build_header(header)
-#
-#     connection.sendall(framed_header)
-#
-#     for chunk in chunks:
-#         connection.sendall(chunk)
-
-
-def receive(connection):
-    header_size_bytes = _receive_exactly(connection, 4)
-    header_size, = struct.unpack('!I', header_size_bytes)
-
-    header_bytes = _receive_exactly(connection, header_size)
-    header_json = header_bytes.decode('utf-8')
-    header = json.loads(header_json)
-
-    payload = _receive_exactly(connection, header['payload_length'])
-
-    return header, payload
-
-
-def _receive_exactly(connection, size):
-    data = bytearray()
-
-    while len(data) < size:
-        remaining = size - len(data)
-        chunk = connection.recv(remaining)
-
-        if chunk is None:
-            return None
-
-        data.extend(chunk)
-
-    return bytes(data)
-
