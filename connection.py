@@ -1,6 +1,8 @@
 import json
 import socket
 import struct
+import time
+
 from protocol import MessageType, build_header, parse_header
 
 
@@ -52,21 +54,40 @@ class Connection:
         return peer_node_id
 
     def send_hello(self, node_id):
-        payload = json.dumps({'node_id': node_id}).encode('utf-8')
+        metadata = {
+            'node_id': node_id,
+        }
+        payload = json.dumps(metadata).encode('utf-8')
+
         self.send(MessageType.HELLO, payload)
 
     def send_hello_ack(self, node_id):
-        payload = json.dumps({'node_id': node_id}).encode('utf-8')
+        metadata = {
+            'node_id': node_id,
+        }
+        payload = json.dumps(metadata).encode('utf-8')
+
         self.send(MessageType.HELLO_ACK, payload)
 
     def send_hello_done(self):
         self.send(MessageType.HELLO_DONE)
 
     def ping(self):
-        self.send(MessageType.PING)
+        metadata = {
+            'ping_sent_time': time.perf_counter_ns()
+        }
+        payload = json.dumps(metadata).encode('utf-8')
 
-    def pong(self):
-        self.send(MessageType.PONG)
+        self.send(MessageType.PING, payload)
+
+    def pong(self, ping_metadata):
+        metadata = {
+            **ping_metadata,
+            'pong_sent_time': time.perf_counter_ns()
+        }
+        payload = json.dumps(metadata).encode('utf-8')
+
+        self.send(MessageType.PONG,payload)
 
     def send(self, message_type, payload=b'', *, stream_id=None):
         header = build_header(
