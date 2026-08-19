@@ -28,7 +28,7 @@ class Node:
         self.node_id = secrets.token_hex(8)
         print(self.node_id)
 
-        self.connected_peers = {}
+        self.connections = {}
         self.known_peers = {}
 
         self.running = False
@@ -92,7 +92,7 @@ class Node:
         thread.start()
 
     def disconnect(self, node_id):
-        connection = self.connected_peers.pop(node_id, None)
+        connection = self.connections.pop(node_id, None)
 
         if connection is None:
             return False
@@ -104,7 +104,7 @@ class Node:
     def _handle_connection(self, connection):
         try:
             peer_node_id = connection.handshake(self.node_id)
-            self.connected_peers[peer_node_id] = connection
+            self.connections[peer_node_id] = connection
 
             print(f'Connected to {peer_node_id}')
 
@@ -195,7 +195,7 @@ class Node:
 
     def send_message(self, node_id, message):
         message_bytes = message.encode('utf-8')
-        connection = self.connected_peers.get(node_id)
+        connection = self.connections.get(node_id)
 
         if connection is None:
             print_error(f'Message error: Not connected to {node_id}')
@@ -217,7 +217,7 @@ class Node:
             'size': file_size,
         }
 
-        connection = self.connected_peers[node_id]
+        connection = self.connections[node_id]
 
         with open(file_path, 'rb') as file:
             chunks = iter(lambda: file.read(4096), b'')
@@ -260,7 +260,7 @@ def handle_commands(node):
             print_error('Invalid arguments. Expected \'send <node_id> <message>\'')
             return
 
-        node.send_message(node_id, message)
+        node.send_file(node_id, message)
     elif command.startswith('disconnect '):
         node_id = command[11:]
 
