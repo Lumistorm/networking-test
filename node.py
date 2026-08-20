@@ -3,6 +3,7 @@ import secrets
 import random
 import os
 from connection import *
+from message_handler import process_message
 
 
 def get_local_ip():
@@ -109,11 +110,10 @@ class Node:
             print(f'Connected to {peer_node_id}')
 
             while self.running:
-                header, data = self.receive(connection)
-                if data is None:
-                    break
+                header, payload = self.receive(connection)
 
-                print_info(f'[{peer_node_id}] {data}')
+                output = process_message(connection, header, payload)
+                print_info(f'[{peer_node_id}] {output}')
 
                 self._handle_packet()
         except OSError:
@@ -224,8 +224,17 @@ class Node:
             connection.send_stream(chunks=chunks, metadata=metadata)
 
     def receive(self, connection):
-        header, payload = connection.receive()
-        return header, payload.decode('utf-8')
+        return connection.receive()
+
+    def ping(self, node_id):
+        connection = self.connections.get(node_id)
+
+        if connection is None:
+            print_error(f'Message error: Not connected to {node_id}')
+
+            return
+
+        connection.ping()
 
 
 def create_node(port):
@@ -260,7 +269,15 @@ def handle_commands(node):
             print_error('Invalid arguments. Expected \'send <node_id> <message>\'')
             return
 
-        node.send_file(node_id, message)
+        node.send_message(node_id, message)
+    elif command.startswith('ping '):
+        try:
+            node_id = command[5:]
+        except ValueError:
+            print_error('Invalid arguments. Expected \'ping <node_id>\'')
+            return
+
+        node.ping(node_id)
     elif command.startswith('disconnect '):
         node_id = command[11:]
 
