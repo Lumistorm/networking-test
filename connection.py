@@ -14,7 +14,7 @@ class Connection:
         self.is_inbound = is_inbound
         self._next_stream_id = 2 if is_inbound else 1
 
-        self.rtt_ns = 0
+        self.rtt_ms = 0
 
     def close(self):
         self.sock.close()
@@ -76,7 +76,7 @@ class Connection:
 
     def ping(self):
         metadata = {
-            'ping_sent_time': time.perf_counter_ns()
+            'ping_sent_time': time.perf_counter()
         }
         payload = json.dumps(metadata).encode('utf-8')
 
@@ -85,7 +85,7 @@ class Connection:
     def pong(self, ping_metadata):
         metadata = {
             **ping_metadata,
-            'pong_sent_time': time.perf_counter_ns()
+            'pong_sent_time': time.perf_counter()
         }
         payload = json.dumps(metadata).encode('utf-8')
 
@@ -142,24 +142,6 @@ class Connection:
             data.extend(chunk)
 
         return bytes(data)
-
-    def handle_message(self, header, payload):
-        message_type = header['type']
-
-        if message_type == MessageType.PING:
-            metadata = json.loads(payload.decode('utf-8'))
-            metadata['ping_received_time'] = time.perf_counter_ns()
-
-            self.pong(metadata)
-
-        elif message_type == MessageType.PONG:
-            metadata = json.loads(payload.decode('utf-8'))
-            pong_received_time = time.perf_counter_ns()
-
-            total_rtt = pong_received_time - metadata['ping_sent_time']
-            processing_time = metadata['pong_sent_time'] - metadata['ping_received_time']
-
-            self.rtt_ns = total_rtt - processing_time
 
 
 def connect(host, port, timeout):
